@@ -5,18 +5,13 @@ async function shortenLink(url) {
     try {
         const response = await fetch(apiUrl);
         if (!response.ok) throw new Error('Network response was not ok');
-        const shortenedUrl = await response.text();
-        if (shortenedUrl) {
-            return shortenedUrl;
-        } else {
-            console.error('Shortening failed: No URL returned');
-            return url;
-        }
+        return await response.text();
     } catch (error) {
         console.error('Error:', error);
-        return url;
+        return url; // Return original URL in case of error
     }
 }
+
 // Function to replace shortcodes with their URLs
 async function replaceShortcodes() {
     const shortcodes = {
@@ -31,16 +26,21 @@ async function replaceShortcodes() {
         mgt: { name: 'GDTOT', regex: /\[mgt id='(.*?)'\]/g, url: 'https://new5.gdtot.dad/file/' },
         mgb: { name: 'GDBOT', regex: /\[mgb id='(.*?)'\]/g, url: 'https://gdmirrorbot.nl/file/' },
     };
+
     const contentContainers = document.querySelectorAll('.post-body');
+    const linksToShorten = [];
+
     for (const contentContainer of contentContainers) {
         let content = contentContainer.innerHTML;
+
         // Process each shortcode
         for (const key in shortcodes) {
             if (shortcodes.hasOwnProperty(key)) {
                 const shortcode = shortcodes[key];
-                // Replace shortcodes with full URLs
                 content = content.replace(shortcode.regex, (match, id) => {
-                    return `<a class='shorten-link' data-url='${shortcode.url}${id}' data-name='${shortcode.name}' target='_blank'>
+                    const fullUrl = `${shortcode.url}${id}`;
+                    linksToShorten.push({ fullUrl, name: shortcode.name, contentContainer });
+                    return `<a class='shorten-link' data-url='${fullUrl}' data-name='${shortcode.name}' target='_blank'>
                                <button class='download-button'>${shortcode.name}</button>
                             </a>`;
                 });
@@ -48,19 +48,32 @@ async function replaceShortcodes() {
         }
         contentContainer.innerHTML = content;
     }
-    // Now shorten the links using DropLink API
-    await shortenLinksInContent();
+
+    // Now shorten the links using the DropLink API
+    await shortenLinksInBatch(linksToShorten);
 }
-// Function to shorten links in the content after initial replacement
-async function shortenLinksInContent() {
-    const links = document.querySelectorAll('.shorten-link');
-    for (const link of links) {
-        const fullUrl = link.getAttribute('data-url');
-        const name = link.getAttribute('data-name');
-        const shortenedUrl = await shortenLink(fullUrl);
-        link.href = shortenedUrl;
-        link.innerHTML = `<button class='download-button'>${name}</button>`;
-    }
+
+// Function to shorten links in parallel using Promise.all
+async function shortenLinksInBatch(linksToShorten) {
+    const shortenPromises = linksToShorten.map(linkObj =>
+        shortenLink(linkObj.fullUrl).then(shortenedUrl => {
+            linkObj.shortenedUrl = shortenedUrl;
+            return linkObj;
+        })
+    );
+
+    // Wait for all links to be shortened
+    const shortenedLinks = await Promise.all(shortenPromises);
+
+    // Update DOM once all links are shortened
+    shortenedLinks.forEach(linkObj => {
+        const link = document.querySelector(`.shorten-link[data-url='${linkObj.fullUrl}']`);
+        if (link) {
+            link.href = linkObj.shortenedUrl;
+            link.innerHTML = `<button class='download-button'>${linkObj.name}</button>`;
+        }
+    });
 }
+
 // Run script after DOM content is loaded
 document.addEventListener('DOMContentLoaded', replaceShortcodes);
